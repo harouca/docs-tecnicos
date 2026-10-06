@@ -311,74 +311,323 @@ docker network rm minha_rede
 
 ## 8. Docker Compose
 
-Para aplicações multi-container (ex: app + banco + cache).
+O Docker Compose é uma ferramenta que permite **definir e executar aplicações multi-container** em um único arquivo de configuração (`docker-compose.yml`). Em vez de digitar vários comandos `docker run`, você descreve toda a sua aplicação (app + banco + cache + proxy...) em um arquivo YAML e sobe tudo com **um único comando**.
 
-### 8.1 Arquivo `docker-compose.yml` (exemplo)
+### 8.1 Por que usar?
+
+Imagine uma aplicação que precisa de:
+- 1 servidor web (nginx)
+- 1 API (Node.js)
+- 1 banco de dados (MySQL)
+- 1 cache (Redis)
+
+**Sem Compose:** 4+ comandos `docker run` com flags diferentes, difíceis de repetir e compartilhar.
+**Com Compose:** 1 arquivo `docker-compose.yml` versionado no Git + `docker compose up -d`.
+
+> **Analogia do professor:** o `docker run` é como montar um prato seguindo a receita de cabeça; o Compose é ter a **receita inteira anotada** e montar o prato inteiro de uma vez, repetível a qualquer momento.
+
+**Vantagens:**
+- **Reprodutibilidade:** qualquer pessoa do time sobe o mesmo ambiente com um comando
+- **Versionamento:** o `docker-compose.yml` vai para o Git junto com o código
+- **Ordem de subida:** o Compose respeita `depends_on` (sobe o banco antes do app)
+- **Rede automática:** containers do mesmo projeto se comunicam automaticamente
+- **Facilidade:** parar tudo, limpar tudo, reconstruir tudo com comandos simples
+
+### 8.2 Comando vs. Comando
+
+| Versão | Sintaxe | Observação |
+|---|---|---|
+| **Nova (recomendada)** | `docker compose` (espaço) | Plugin oficial, vem com o Docker Desktop/moderno |
+| **Antiga (legada)** | `docker-compose` (hífen) | Python antigo, descontinuado |
+
+> Neste guia usamos a forma nova: **`docker compose`**. Se o seu sistema só tiver a antiga, basta trocar para `docker-compose`.
+
+### 8.3 Anatomia do arquivo `docker-compose.yml`
+
+Todo arquivo tem **três blocos principais**:
 
 ```yaml
-version: '3.8'
+services:    # 1. QUAIS containers vamos subir
+  ...
 
+volumes:     # 2. ONDE os dados serão persistidos
+  ...
+
+networks:    # 3. COMO os containers se comunicam
+  ...
+```
+
+| Bloco | Função |
+|---|---|
+| `services` | Cada serviço = um container (ou grupo de réplicas) |
+| `volumes` | Nomes de volumes declarados para persistência de dados |
+| `networks` | Redes customizadas para comunicação entre serviços |
+
+### 8.4 Exemplo completo (stack de 3 serviços)
+
+```yaml
 services:
-  app:
-    build: .
+  # ---------- Serviço 1: Frontend ----------
+  web:
+    image: nginx:alpine
+    ports:
+      - "80:80"              # host:container
+    volumes:
+      - ./html:/usr/share/nginx/html   # monta pasta local
+    depends_on:
+      - api
+    networks:
+      - frontend
+
+  # ---------- Serviço 2: API ----------
+  api:
+    build: ./api             # builda a partir do Dockerfile em ./api
     ports:
       - "3000:3000"
-    environment:
+    environment:             # variáveis de ambiente (lista)
       - DB_HOST=db
-      - DB_USER=usuario
-      - DB_PASS=senha
+      - DB_PORT=3306
+      - DB_USER=app_user
+      - DB_PASS=${DB_PASS}   # valor vem do arquivo .env
     depends_on:
-      - db
-    volumes:
-      - ./src:/app/src
+      db:
+        condition: service_healthy   # espera o banco ficar saudável
+    networks:
+      - frontend
+      - backend
 
+  # ---------- Serviço 3: Banco de dados ----------
   db:
     image: mysql:8.0
     environment:
-      - MYSQL_ROOT_PASSWORD=senha123
+      - MYSQL_ROOT_PASSWORD=${DB_PASS}
       - MYSQL_DATABASE=meubanco
+      - MYSQL_USER=app_user
     volumes:
-      - db_data:/var/lib/mysql
+      - db_data:/var/lib/mysql        # persiste os dados
+    healthcheck:                      # como saber se está saudável?
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
-      - minha_rede
+      - backend
 
+# ---------- Volumes nomeados ----------
 volumes:
   db_data:
 
+# ---------- Redes customizadas ----------
 networks:
-  minha_rede:
+  frontend:
+  backend:
 ```
 
-### 8.2 Comandos Principais
+**O que esse arquivo faz:**
+1. Cria 2 redes (`frontend` e `backend`) — o nginx fala com a API, mas não fala direto com o banco
+2. Sobe o MySQL com volume persistente (dados sobrevivem ao `down`)
+3. Espera o MySQL ficar **saudável** antes de subir a API (`depends_on` + `healthcheck`)
+4. Sobe a API apontando para o banco pelo **nome do serviço** (`DB_HOST=db`)
+5. Sobe o nginx servindo os arquivos de `./html`
+
+### 8.5 Comandos Principais
 
 ```bash
-# Subir tudo em background
+# ---------- Subir a stack ----------
+docker compose up -d          # cria e inicia em background
+docker compose up             # cria e inicia com logs no terminal (Ctrl+C não para!)
+docker compose up -d --build  # builda as imagens e inicia
+
+# ---------- Parar a stack ----------
+docker compose down           # para e REMOVE containers, redes (mantém volumes)
+docker compose down -v        # para e REMOVE tudo, inclusive volumes (CUIDADO!)
+docker compose stop           # para os containers (mantém para reiniciar depois)
+docker compose start          # reinicia containers já criados
+
+# ---------- Visualização ----------
+docker compose ps             # status dos serviços
+docker compose logs           # logs de todos os serviços
+docker compose logs -f api    # logs em tempo real de um serviço
+docker compose top            # processos rodando em cada container
+
+# ---------- Build ----------
+docker compose build          # builda imagens dos serviços com "build:"
+docker compose build --no-cache   # build sem usar cache
+
+# ---------- Execução ----------
+docker compose exec api bash      # entra no container do serviço
+docker compose run api npm test   # executa comando pontual (sem subir todo o stack)
+docker compose exec db mysql -u root -p   # acessa o MySQL
+
+# ---------- Controle individual ----------
+docker compose restart api    # reinicia só a API
+docker compose pause api      # pausa só a API
+docker compose unpause api    # despausa
+docker compose rm api         # remove o container do serviço (parado)
+```
+
+### 8.6 Variáveis de Ambiente no Compose
+
+Existem **3 formas** de passar variáveis:
+
+```yaml
+services:
+  api:
+    environment:                          # Forma 1: inline no YAML
+      - CHAVE=valor
+      - OUTRA=outra_coisa
+
+  db:
+    env_file: .env                        # Forma 2: arquivo .env (recomendado)
+```
+
+```bash
+# Forma 3: variáveis do shell/terminal
+DB_PASS=minha_senha docker compose up -d
+```
+
+**Arquivo `.env`** (fica ao lado do `docker-compose.yml`, **não** versione no Git se tiver segredos):
+
+```env
+DB_PASS=minha_senha_segura
+API_KEY=chave_secreta
+```
+
+> **Dica:** `${VARIAVEL}` no YAML busca o valor no `.env` automaticamente.
+
+### 8.7 Condições do `depends_on`
+
+O `depends_on` básico só espera o container **iniciar**, não estar **pronto**. Use com `condition`:
+
+```yaml
+services:
+  api:
+    depends_on:
+      db:
+        condition: service_healthy   # espera healthcheck passar (recomendado)
+      cache:
+        condition: service_started   # só espera iniciar
+      migration:
+        condition: service_completed_successfully  # espera terminar com sucesso
+```
+
+| Condição | Quando passa |
+|---|---|
+| `service_started` | Container iniciou |
+| `service_healthy` | Healthcheck retornou OK |
+| `service_completed_successfully` | Container terminou com exit code 0 |
+
+### 8.8 Escalando Serviços (Réplicas)
+
+```yaml
+services:
+  api:
+    build: ./api
+    deploy:
+      replicas: 3          # sobe 3 réplicas da API
+```
+
+```bash
+# No Compose v2, escala também via comando:
+docker compose up -d --scale api=3
+```
+
+> **Atenção:** se o serviço tem `ports:`, não é possível escalar (conflito de porta). Use um **load balancer** (nginx/traefik) na frente.
+
+### 8.9 Profiles e Serviços Sob Demanda
+
+```yaml
+services:
+  migracao:
+    image: meu-app:v1.0
+    command: ./run_migrations.sh    # sobrescreve o CMD da imagem
+    profiles:
+      - tools                       # só roda quando solicitado explicitamente
+```
+
+```bash
+# Serviços com profile "tools" NÃO sobem no up normal:
 docker compose up -d
 
-# Subir e ver logs
-docker compose up
+# Roda o serviço de migração sob demanda:
+docker compose --profile tools up migracao
+# ou:
+docker compose run migracao
+```
 
-# Parar e remover containers, redes, volumes
-docker compose down
+### 8.10 Fluxo de Trabalho do Dia a Dia
 
-# Parar sem remover
-docker compose stop
+```bash
+# 1. Clonar o projeto
+git clone https://github.com/equipe/projeto.git
+cd projeto
 
-# Ver logs
+# 2. Criar arquivo .env (copie do .env.example)
+cp .env.example .env
+nano .env
+
+# 3. Subir tudo
+docker compose up -d --build
+
+# 4. Verificar status
+docker compose ps
 docker compose logs -f
 
-# Ver status
-docker compose ps
+# 5. Testar a aplicação
+http://localhost:80
 
-# Build das imagens
-docker compose build
+# 6. Parar tudo ao final do trabalho
+docker compose down
 
-# Rebuild forçado (sem cache)
-docker compose build --no-cache
-
-# Executar comando em um service
-docker compose exec app bash
+# 7. Limpar volumes órfãos (quando quiser zerar os dados)
+docker compose down -v
 ```
+
+### 8.11 Comandos de Manutenção
+
+```bash
+# Ver o que o Compose faria (dry-run)
+docker compose config
+
+# Validar a sintaxe do docker-compose.yml
+docker compose config --quiet && echo "OK"
+
+# Atualizar um serviço específico
+docker compose pull db         # baixa nova imagem
+docker compose up -d db        # recria só o db
+
+# Reconstruir tudo do zero
+docker compose build --no-cache
+docker compose up -d --force-recreate
+```
+
+### 8.12 Problemas Comuns do Compose
+
+| Problema | Causa provável | Solução |
+|---|---|---|
+| Porta já em uso | Outro container usando a porta | `docker compose down` ou troque a porta |
+| `depends_on` não espera | Falta `condition: service_healthy` | Adicione healthcheck + condition |
+| Variável vazia | `.env` ausente ou com erro | Verifique se `.env` existe e está preenchido |
+| Container reinicia em loop | Erro na aplicação (crash) | `docker compose logs <servico>` |
+| Permissão negada em volume | UID do host ≠ UID do container | Ajuste permissões da pasta montada |
+| Quero recomeçar do zero | Resíduos de configuração antiga | `docker compose down -v --rmi all` |
+
+### 8.13 `docker-compose.yml` mínimo para começar
+
+```yaml
+services:
+  app:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+```
+
+```bash
+docker compose up -d   # sobe em 5 segundos
+docker compose down
+```
+
+> **Dica de Professor:** comece simples. Suba um serviço só, entenda `ports`, `volumes` e `environment`; depois adicione o banco; depois a rede. Compose se aprende **construindo stacks pequenas primeiro**.
 
 ---
 
@@ -643,10 +892,16 @@ docker system prune -a --volumes                # Limpeza total
 
 ### Compose
 ```bash
-docker compose up -d                            # Subir
-docker compose down                             # Derrubar
-docker compose logs -f                          # Logs
+docker compose up -d                            # Subir tudo (builda se necessário)
+docker compose up -d --build                    # Forçar build + subir
+docker compose down                             # Derrubar (mantém volumes)
+docker compose down -v                          # Derrubar apagando volumes
+docker compose ps                               # Status dos serviços
+docker compose logs -f [servico]                # Logs tempo real
 docker compose exec servico bash                # Entrar no serviço
+docker compose restart [servico]                # Reiniciar serviço
+docker compose build --no-cache                 # Rebuild sem cache
+docker compose config --quiet && echo OK        # Validar sintaxe do YAML
 ```
 
 ---
