@@ -7,6 +7,7 @@ Este repositório foi criado para reunir materiais técnicos de diferentes área
 - [Git](Git/Resumo%20GIT.md) — resumo de conceitos, comandos e boas práticas de Git e GitHub.
 - [IA](IA/resumoia.md) — introdução a LLMs, modelos, agentes e MCP.
 - [SSH](ssh/guia_ssh.md) — guia prático sobre autenticação por chaves SSH.
+- [Docker](Docker/docker.md) — guia de estudos com comandos essenciais, Docker Compose, build de imagens, limpeza e boas práticas.
 
 ## Objetivo
 
